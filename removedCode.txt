@@ -1,0 +1,318 @@
+'''
+import os
+import json
+import pandas as pd
+from pathlib import Path
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+dataset_dir = "data"
+captions_dir = os.path.join(dataset_dir, "captions")
+images_dir = os.path.join(dataset_dir, "images", "pics")
+output_csv = os.path.join(dataset_dir, "aligned_dataset.csv")
+
+def find_image_path(candidate, images_dir):
+    for ext in ['png', 'jpg', 'jpeg']:
+        path = os.path.join(images_dir, f"{candidate}.{ext}")
+        if os.path.exists(path):
+            return path
+    return None
+
+def load_captions(directory):
+    data = []
+    for file in os.listdir(directory):
+        if file.endswith('.json'):
+            file_path = os.path.join(directory, file)
+            with open(file_path, 'r') as f:
+                json_data = json.load(f)
+                for entry in json_data:
+                    data.append({
+                        "file": file,
+                        "candidate": entry.get("candidate"),
+                        "target": entry.get("target"),
+                        "captions": entry.get("captions", [])
+                    })
+    df = pd.DataFrame(data)
+    logger.info(f"Loaded {len(df)} entries from {len(os.listdir(directory))} JSON files")
+    return df
+
+def align_data(df, images_dir):
+    image_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    image_ids = set(Path(f).stem.lower() for f in image_files)
+    candidate_ids = set(df["candidate"].str.lower().dropna())
+    common_ids = candidate_ids.intersection(image_ids)
+    df_aligned = df[df["candidate"].str.lower().isin(common_ids)].copy()
+
+    valid_rows = []
+    mismatches = []
+    for _, row in df_aligned.iterrows():
+        candidate = row['candidate']
+        img_path = find_image_path(candidate, images_dir)
+        if not img_path:
+            mismatches.append((candidate, row['captions'][0] if row['captions'] else "No caption"))
+            logger.warning(f"Image not found for {candidate}")
+        else:
+            valid_rows.append(row)
+
+    df_aligned = pd.DataFrame(valid_rows)
+    logger.info(f"Final aligned size: {len(df_aligned)} rows")
+    if mismatches:
+        logger.error(f"Found {len(mismatches)} mismatches:")
+        for candidate, caption in mismatches:
+            logger.error(f"{candidate}: Image missing (Caption: {caption})")
+    return df_aligned, common_ids
+
+logger.info("Starting preprocessing...")
+df = load_captions(captions_dir)
+df_aligned, _ = align_data(df, images_dir)
+df_aligned.to_csv(output_csv, index=False)
+logger.info(f"Saved aligned dataset to {output_csv}")
+print(df_aligned.head())
+'''
+
+'''# preprocess.py - Preprocess dataset and check alignment
+
+import os
+import json
+import pandas as pd
+from pathlib import Path
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Define directories
+dataset_dir = "data"
+captions_dir = os.path.join(dataset_dir, "captions")
+images_dir = os.path.join(dataset_dir, "images", "pics")
+output_csv = os.path.join(dataset_dir, "aligned_dataset.csv")
+
+# Load captions into DataFrame
+def load_captions(directory):
+    data = []
+    for file in os.listdir(directory):
+        if file.endswith('.json'):
+            file_path = os.path.join(directory, file)
+            with open(file_path, 'r') as f:
+                json_data = json.load(f)
+                for entry in json_data:
+                    row = {
+                        "file": file,  # Track origin (test/train)
+                        "candidate": entry.get("candidate"),
+                        "target": entry.get("target"),
+                        "captions": entry.get("captions", [])
+                    }
+                    data.append(row)
+    df = pd.DataFrame(data)
+    logger.info(f"Loaded {len(df)} entries from {len(os.listdir(directory))} JSON files")
+    return df
+
+# Alignment checking function
+def align_data(df, images_dir):
+    # Get image IDs (strip .png and convert to consistent case)
+    image_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    image_ids = set(Path(f).stem.lower() for f in image_files)
+    logger.info(f"Total unique image IDs: {len(image_ids)}")
+
+    # Get candidate IDs from DataFrame
+    candidate_ids = set(df["candidate"].str.lower().dropna())
+    logger.info(f"Total unique candidate IDs: {len(candidate_ids)}")
+
+    # Find common IDs
+    common_ids = candidate_ids.intersection(image_ids)
+    logger.info(f"Common IDs count: {len(common_ids)}")
+
+    # Filter DataFrame to only rows with common IDs
+    df_aligned = df[df["candidate"].str.lower().isin(common_ids)].copy()
+    logger.info(f"Initial aligned size (all rows): {len(df_aligned)} rows")
+
+    # Verify each row by checking file existence and log mismatches
+    valid_rows = []
+    mismatches = []
+    for idx, row in df_aligned.iterrows():
+        candidate = row['candidate']
+        img_path = os.path.join(images_dir, f"{candidate}.png")
+        if not os.path.exists(img_path):
+            mismatches.append((candidate, row['captions'][0] if row['captions'] else "No caption", "Image not found"))
+            logger.warning(f"Mismatch for {candidate}: Image not found")
+        else:
+            valid_rows.append(row)
+            logger.info(f"Verified alignment for {candidate}: Image exists")
+
+    df_aligned = pd.DataFrame(valid_rows)
+    logger.info(f"Final aligned size (verified rows): {len(df_aligned)} rows")
+
+    # Report mismatches
+    if mismatches:
+        logger.error(f"Found {len(mismatches)} alignment issues:")
+        for candidate, caption, reason in mismatches:
+            logger.error(f"Candidate {candidate}: {reason} (Caption: {caption})")
+
+    return df_aligned, common_ids
+
+# Main execution
+logger.info(f"Starting execution at {dataset_dir}")
+df = load_captions(captions_dir)
+df_aligned, common_ids = align_data(df, images_dir)
+
+# Save aligned DataFrame for future use
+df_aligned.to_csv(output_csv, index=False)
+logger.info(f"Aligned dataset saved to {output_csv}.")
+
+# Optional: Save test/train separately if needed
+# Uncomment and adjust if you want separate files
+# df_test = df_aligned[df_aligned['file'] == 'test.json']
+# df_train = df_aligned[df_aligned['file'] == 'train.json']
+# df_test.to_csv(os.path.join(dataset_dir, "test_dataset.csv"), index=False)
+# df_train.to_csv(os.path.join(dataset_dir, "train_dataset.csv"), index=False)
+
+print("\nSample of aligned data (first 5 rows):")
+print(df_aligned.head())
+'''
+'''import os
+import json
+import pandas as pd
+from pathlib import Path
+
+# Define directories
+dataset_dir = "data"
+captions_dir = os.path.join(dataset_dir, "captions")
+images_dir = os.path.join(dataset_dir, "images", "pics")
+
+# Load captions into DataFrame
+def load_captions(directory):
+    data = []
+    for file in os.listdir(directory):
+        if file.endswith('.json'):
+            file_path = os.path.join(directory, file)
+            with open(file_path, 'r') as f:
+                json_data = json.load(f)
+                for entry in json_data:
+                    row = {
+                        "file": file,
+                        "candidate": entry.get("candidate"),
+                        "target": entry.get("target"),
+                        "captions": entry.get("captions", [])
+                    }
+                    data.append(row)
+    return pd.DataFrame(data)
+
+# Load images and filter DataFrame with strict alignment
+def align_data(df, images_dir):
+    # Get image IDs (strip .png and convert to consistent case)
+    image_files = [f for f in os.listdir(images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    image_ids = set(Path(f).stem.lower() for f in image_files)
+    print(f"Total unique image IDs: {len(image_ids)}")
+    print(f"Sample image IDs: {list(image_ids)[:5]}")
+
+    # Get candidate IDs from DataFrame
+    candidate_ids = set(df["candidate"].str.lower().dropna())
+    print(f"Total unique candidate IDs: {len(candidate_ids)}")
+    print(f"Sample candidate IDs: {list(candidate_ids)[:5]}")
+
+    # Find common IDs
+    common_ids = candidate_ids.intersection(image_ids)
+    print(f"Common IDs count: {len(common_ids)}")
+    print(f"Sample common IDs: {list(common_ids)[:5]}")
+
+    # Filter DataFrame to only rows with common IDs
+    df_aligned = df[df["candidate"].str.lower().isin(common_ids)].copy()
+    print(f"Initial aligned size (all rows): {len(df_aligned)} rows")
+
+    # Verify each row by checking file existence (optional strict check)
+    valid_rows = []
+    for idx, row in df_aligned.iterrows():
+        img_path = os.path.join(images_dir, f"{row['candidate']}.png")
+        if os.path.exists(img_path):
+            valid_rows.append(row)
+    df_aligned = pd.DataFrame(valid_rows)
+    print(f"Final aligned size (verified rows): {len(df_aligned)} rows")
+
+    return df_aligned, common_ids
+
+# Main execution
+print(f"Starting execution at {dataset_dir}")
+df = load_captions(captions_dir)
+df_aligned, common_ids = align_data(df, images_dir)
+
+# Save aligned DataFrame for future use
+df_aligned.to_csv("aligned_dataset.csv", index=False)
+print("Aligned dataset saved to 'aligned_dataset.csv'.")
+print("\nSample of aligned data (first 5 rows):")
+print(df_aligned.head())'''
+
+
+'''
+import os
+import pandas as pd
+import torch
+from PIL import Image
+from transformers import CLIPProcessor, CLIPModel
+import faiss
+import numpy as np
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+dataset_dir = "data"
+images_dir = os.path.join(dataset_dir, "images", "pics")
+csv_path = os.path.join(dataset_dir, "aligned_dataset.csv")
+image_embeds_path = os.path.join(dataset_dir, "image_embeds.npy")
+index_path = os.path.join(dataset_dir, "image_index.faiss")
+
+def find_image_path(candidate, images_dir):
+    for ext in ['png', 'jpg', 'jpeg']:
+        path = os.path.join(images_dir, f"{candidate}.{ext}")
+        if os.path.exists(path):
+            return path
+    return None
+
+df = pd.read_csv(csv_path)
+df['captions'] = df['captions'].apply(eval)
+
+model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+def generate_embeddings(df, images_dir, model, processor, batch_size=64):
+    all_image_embeds = []
+    all_text_embeds = []
+    for start_idx in range(0, len(df), batch_size):
+        end_idx = min(start_idx + batch_size, len(df))
+        batch = df.iloc[start_idx:end_idx]
+        image_inputs = []
+        text_inputs = []
+        for _, row in batch.iterrows():
+            img_path = find_image_path(row['candidate'], images_dir)
+            if img_path:
+                image = Image.open(img_path).convert("RGB")
+                caption = row["captions"][0] if row["captions"] else "no caption"
+                inputs = processor(text=caption, images=image, return_tensors="pt", padding="max_length", max_length=77, truncation=True)
+                image_inputs.append(inputs["pixel_values"].to(device))
+                text_inputs.append(inputs["input_ids"].to(device))
+        if image_inputs and text_inputs:
+            inputs = {
+                "pixel_values": torch.cat(image_inputs, dim=0),
+                "input_ids": torch.cat(text_inputs, dim=0)
+            }
+            outputs = model(**inputs)
+            image_embeds = outputs.image_embeds.detach().cpu().numpy()
+            text_embeds = outputs.text_embeds.detach().cpu().numpy()
+            all_image_embeds.append(image_embeds)
+            all_text_embeds.append(text_embeds)
+    image_embeds = np.vstack(all_image_embeds)
+    text_embeds = np.vstack(all_text_embeds)
+    image_embeds = image_embeds / np.linalg.norm(image_embeds, axis=1, keepdims=True)
+    text_embeds = text_embeds / np.linalg.norm(text_embeds, axis=1, keepdims=True)
+    return image_embeds, text_embeds
+
+image_embeds, text_embeds = generate_embeddings(df, images_dir, model, processor)
+index = faiss.IndexFlatIP(image_embeds.shape[1])
+index.add(image_embeds)
+
+np.save(image_embeds_path, image_embeds)
+faiss.write_index(index, index_path)
+print(f"Saved embeddings to {image_embeds_path} and index to {index_path}")
+'''
